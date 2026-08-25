@@ -1,0 +1,12 @@
+node_modules
+runs
+browser-profile
+test
+.git
+.github
+
+# Never let secrets into an image layer — mount them at run time instead.
+vault.enc
+vault.key
+.env
+otp.txt

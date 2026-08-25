@@ -1,11 +1,14 @@
 {
   "_comment": [
     "Candidate locators for each step, tried in order across every frame on the page.",
-    "These are informed guesses at a typical Indian gift-card portal — the first run",
-    "WILL need corrections. Run `node src/index.js calibrate`, find the real selectors,",
-    "and put overrides in selectors.local.json (same keys, replaces the list outright).",
-    "Never edit this file for personal fixes; selectors.local.json is gitignored-adjacent",
-    "and keeps your customisations separate from updates."
+    "Written from the portal's public JavaScript bundle (which is where the mobile_email,",
+    "otp_modal and order-confirmation names come from) rather than a signed-in session,",
+    "so the first run WILL need corrections. Run `node src/index.js calibrate`, find the",
+    "real selectors, and put overrides in selectors.local.json — same keys, replacing the",
+    "list outright. Keep personal fixes there so updates to this file do not clobber them.",
+    "",
+    "The portal is a React build with minified class names, so prefer text, placeholder",
+    "and label selectors: those survive a redeploy, '.lsss3' does not."
   ],
 
   "loggedInMarker": [
@@ -21,12 +24,15 @@
     "role=link|Sign in",
     "text=Login"
   ],
-  "username": [
-    "label=User ID",
-    "label=Username",
-    "placeholder=User ID",
+  "loginIdentifier": [
+    "placeholder=Mobile Number or Email",
+    "placeholder=Mobile Number",
     "placeholder=Mobile",
-    "css=input[name='username'], input[name='userid'], input#username"
+    "label=Mobile Number or Email",
+    "label=Mobile Number",
+    "css=input[name='mobile_email'], input[name='mobile'], input[name='mobile_number']",
+    "css=input[name='username'], input[name='userid'], input#username",
+    "css=input[type='tel']"
   ],
   "password": [
     "label=Password",
@@ -37,13 +43,18 @@
     "role=button|Log in",
     "role=button|Login",
     "role=button|Sign in",
+    "role=button|Continue",
+    "role=button|Get OTP",
+    "role=button|Send OTP",
     "css=button[type='submit']"
   ],
   "loginOtp": [
     "label=OTP",
     "placeholder=OTP",
     "placeholder=Enter OTP",
-    "css=input[autocomplete='one-time-code'], input[name*='otp' i]"
+    "css=.otp_modal input, [class*='otp'] input",
+    "css=input[name='otpname'], input[name*='otp' i]",
+    "css=input[autocomplete='one-time-code']"
   ],
   "loginOtpSubmit": [
     "role=button|Verify",
@@ -101,9 +112,11 @@
   "orderTotal": [
     "css=[data-testid='order-total']",
     "css=.order-total, .grand-total, .cart-total, .total-amount",
+    "css=.jlkk, .belowvalue, .redemption-fee-container",
     "text=Order total",
     "text=Grand total",
-    "text=Total payable"
+    "text=Total payable",
+    "text=Total Amount"
   ],
   "checkout": [
     "role=button|Proceed to checkout",
@@ -177,11 +190,12 @@
     "text=Payment successful",
     "text=Thank you for your order",
     "text=Order placed",
+    "text=Your order",
     "css=[data-testid='order-success']"
   ],
   "orderId": [
     "css=[data-testid='order-id']",
-    "css=.order-id, .order-number",
+    "css=.order-id, .order-number, .order-code",
     "text=Order ID"
   ]
 }

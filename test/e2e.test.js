@@ -16,7 +16,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shopwise-e2e-'));
 
 // Config is read at import time, so the environment has to be set up first.
 process.env.AMOUNT = '1000';
-process.env.MAX_AMOUNT = '1000';
+// Deliberately NOT setting MAX_AMOUNT: the ceiling should be derived from the fee
+// percentages, which is what makes room for the ₹17.70 the portal adds.
 process.env.SEARCH_TERM = 'Amazon Pay';
 process.env.HEADLESS = 'true';
 process.env.SLOW_MO_MS = '0';
@@ -30,13 +31,14 @@ process.env.CHROMIUM_PATH =
 const portal = await startMockPortal();
 process.env.SHOPWISE_URL = portal.url;
 
-const { config, loadSelectors } = await import('../src/config.js');
+const { config, loadSelectors, expectedCharge } = await import('../src/config.js');
 const { runPurchase } = await import('../src/flow.js');
 const { openRunLog, closeRunLog } = await import('../src/log.js');
 
 const vault = {
-  portalUsername: 'testuser',
-  portalPassword: 'testpass',
+  portalMobile: portal.mobile,
+  portalEmail: '',
+  portalPassword: '',
   cardNumber: portal.card.number,
   cardExpMonth: '12',
   cardExpYear: '30',
@@ -83,7 +85,10 @@ test('dry run stops at the cart without paying', { timeout: 180_000 }, async () 
       runDir: path.join(tmp, 'dry'),
     });
     assert.equal(result.status, 'dry-run');
-    assert.equal(result.total, 1000);
+    // The face value is ₹1,000 but the charge includes the fee: ₹1,017.70.
+    assert.equal(result.faceValue, 1000);
+    assert.equal(result.total, 1017.7);
+    assert.equal(result.fee, 17.7);
     assert.equal(portal.state.payment, null, 'a dry run must never reach the payment endpoint');
   } finally {
     stop();
@@ -104,7 +109,8 @@ test('live run completes the purchase end to end', { timeout: 180_000 }, async (
     });
 
     assert.equal(result.status, 'success');
-    assert.equal(result.total, 1000);
+    assert.equal(result.total, 1017.7);
+    assert.equal(result.fee, 17.7);
     assert.match(result.orderId, /SW\d+/);
 
     // The right ₹1,000 denomination reached the cart...
@@ -120,10 +126,10 @@ test('live run completes the purchase end to end', { timeout: 180_000 }, async (
   }
 });
 
-test('a wrong order total aborts before payment', { timeout: 180_000 }, async () => {
+test('a total above the fee ceiling aborts before payment', { timeout: 180_000 }, async () => {
   freshProfile();
   portal.state.payment = null;
-  portal.state.amountTampered = true;
+  portal.state.amountTampered = true; // ₹1,500 face value → ₹1,526.55 charged
   const stop = autoAnswerOtp();
   try {
     await assert.rejects(
@@ -133,13 +139,22 @@ test('a wrong order total aborts before payment', { timeout: 180_000 }, async ()
         live: true,
         runDir: path.join(tmp, 'tampered'),
       }),
-      /Order total is 1500 but expected 1000/,
+      /exceeds the ceiling/,
     );
     assert.equal(portal.state.payment, null, 'the guardrail must stop the card ever being sent');
   } finally {
     portal.state.amountTampered = false;
     stop();
   }
+});
+
+test('the real convenience fee is accepted, not treated as tampering', () => {
+  // The regression that mattered: asserting total === faceValue aborted every run,
+  // because the portal always charges the fee on top.
+  const expect = expectedCharge(1000);
+  assert.equal(expect.total, 1017.7);
+  assert.ok(portal.feeFor(1000) + 1000 <= expect.ceiling, 'the real fee must sit under the ceiling');
+  assert.ok(expect.ceiling < 1100, 'the ceiling must still be tight enough to be worth having');
 });
 
 test('the live run leaks nothing sensitive into its artifacts', { timeout: 60_000 }, async () => {
@@ -151,7 +166,9 @@ test('the live run leaks nothing sensitive into its artifacts', { timeout: 60_00
   assert.ok(!contents.includes(portal.card.number), 'card number must not appear in the log');
   assert.ok(!contents.includes(portal.card.cvv), 'CVV must not appear in the log');
   assert.ok(!contents.includes(portal.otp), 'OTP must not appear in the log');
-  assert.ok(!contents.includes(vault.portalPassword), 'password must not appear in the log');
+  if (vault.portalPassword) {
+    assert.ok(!contents.includes(vault.portalPassword), 'password must not appear in the log');
+  }
 
   // And the flow should have captured the screenshots needed to debug a failure.
   const shots = fs.readdirSync(runDir).filter((f) => f.endsWith('.png'));

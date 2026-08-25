@@ -13,7 +13,8 @@ Amex Shopwise — Amazon Pay gift card autobuy
 
   node src/index.js setup             Store portal login + card details (encrypted)
   node src/index.js calibrate [url]   Open a page and dump its selectors, to fix selectors.local.json
-  node src/index.js run [options]     Run the purchase flow
+  node src/index.js run [options]     Run the purchase flow once, from this terminal
+  node src/index.js worker            Poll the Tools page for purchases and run them
   node src/index.js status            Show progress through the ${config.totalRuns} monthly purchases
   node src/index.js reset             Clear the run history (does not touch the vault)
 
@@ -35,9 +36,13 @@ async function cmdSetup() {
     return;
   }
 
+  console.log('The portal signs you in by mobile or email and then sends an OTP,');
+  console.log('so a password is usually not needed — leave it blank if you have none.\n');
+
   const data = {
-    portalUsername: await askRequired('Shopwise user ID / mobile: '),
-    portalPassword: await askRequired('Shopwise password: ', { hidden: true }),
+    portalMobile: await askRequired('Shopwise mobile number: '),
+    portalEmail: await ask('Shopwise email (blank to skip): '),
+    portalPassword: await ask('Shopwise password (blank if OTP-only): ', { hidden: true }),
     cardNumber: (await askRequired('Card number: ', { hidden: true })).replace(/\D/g, ''),
     cardExpMonth: (await askRequired('Expiry month (MM): ')).padStart(2, '0'),
     cardExpYear: await askRequired('Expiry year (YY or YYYY): '),
@@ -45,7 +50,9 @@ async function cmdSetup() {
     cardName: await ask('Name on card (blank to skip): '),
   };
 
-  for (const key of ['portalPassword', 'cardNumber', 'cardCvv']) registerSecret(data[key]);
+  for (const key of ['portalPassword', 'cardNumber', 'cardCvv']) {
+    if (data[key]) registerSecret(data[key]);
+  }
 
   if (!/^\d{12,19}$/.test(data.cardNumber)) {
     throw new Error('That card number does not look right (expected 12-19 digits).');
@@ -192,10 +199,19 @@ async function cmdReset() {
   console.log('Run history cleared. The vault is untouched.');
 }
 
+async function cmdWorker() {
+  const { runWorker } = await import('./worker.js');
+  if (!config.appUrl || !config.workerToken) {
+    throw new Error('Worker mode needs APP_URL and WORKER_TOKEN in .env. See the README.');
+  }
+  await runWorker();
+}
+
 const commands = {
   setup: cmdSetup,
   calibrate: cmdCalibrate,
   run: cmdRun,
+  worker: cmdWorker,
   status: cmdStatus,
   reset: cmdReset,
 };

@@ -10,13 +10,26 @@ import http from 'node:http';
 
 const CARD = { number: '4111111111111111', cvv: '4821', exp: '1230' };
 const OTP = '654321';
+const MOBILE = '9876500000';
+
+/** Same arithmetic the real portal does: 1.5% convenience fee, then 18% GST on it. */
+const FEE_PERCENT = 1.5;
+const GST_PERCENT = 18;
+const feeFor = (amount) => (amount * FEE_PERCENT) / 100 * (1 + GST_PERCENT / 100);
+const money = (n) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const html = (body) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">${body}`;
 
 export function startMockPortal(port = 0) {
   const sessions = new Set();
-  const state = { cart: null, payment: null, orderId: null, amountTampered: false };
+  const state = {
+    cart: null,
+    chargedTotal: null,
+    payment: null,
+    orderId: null,
+    amountTampered: false,
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -44,26 +57,30 @@ export function startMockPortal(port = 0) {
       case '/':
         return send(`<h1>Shopwise</h1>${nav}`);
 
+      // Sign-in is by mobile number (or email) and an OTP — no password at all,
+      // which is what the real portal does.
       case '/login':
         if (req.method === 'POST') {
-          if (form.get('username') === 'testuser' && form.get('password') === 'testpass') {
+          const identifier = (form.get('mobile_email') || '').replace(/\D/g, '');
+          if (identifier === MOBILE) {
             return send(`<h1>Verify</h1>
-              <form method="POST" action="/login-otp">
-                <label>OTP <input name="otp" autocomplete="one-time-code"></label>
-                <button type="submit">Verify</button>
-              </form>`);
+              <div class="otp_modal">
+                <form method="POST" action="/login-otp">
+                  <label>OTP <input name="otpname" autocomplete="one-time-code"></label>
+                  <button type="submit">Verify</button>
+                </form>
+              </div>`);
           }
-          return send(`<p>Invalid credentials</p>`, 401);
+          return send(`<p>Unknown mobile number</p>`, 401);
         }
         return send(`<h1>Login</h1>
           <form method="POST" action="/login">
-            <label>User ID <input name="username"></label>
-            <label>Password <input type="password" name="password"></label>
-            <button type="submit">Login</button>
+            <label>Mobile Number or Email <input name="mobile_email" type="tel"></label>
+            <button type="submit">Continue</button>
           </form>`);
 
       case '/login-otp': {
-        if (form.get('otp') !== OTP) return send('<p>Wrong OTP</p>', 401);
+        if (form.get('otpname') !== OTP) return send('<p>Wrong OTP</p>', 401);
         const sid = `s${Date.now()}`;
         sessions.add(sid);
         return redirect('/', { 'set-cookie': `sid=${sid}; Path=/` });
@@ -99,10 +116,16 @@ export function startMockPortal(port = 0) {
           return redirect('/cart');
         }
         // The test can force a mismatch here to prove the guardrail bites.
-        const shown = state.amountTampered ? state.cart + 500 : state.cart;
+        const face = state.amountTampered ? state.cart + 500 : state.cart;
+        const fee = feeFor(face);
+        state.chargedTotal = Math.round((face + fee) * 100) / 100;
         return send(`${nav}<h1>Cart</h1>
           <p>Amazon Pay Gift Card</p>
-          <p class="order-total">Order total ₹${shown.toLocaleString('en-IN')}.00</p>
+          <div class="order-total">
+            <div>Sub total ₹${money(face)}</div>
+            <div>Convenience fee (${FEE_PERCENT}%) + GST ₹${money(fee)}</div>
+            <div>Total Amount ₹${money(face + fee)}</div>
+          </div>
           <form action="/checkout"><button type="submit">Proceed to checkout</button></form>`);
       }
 
@@ -155,6 +178,8 @@ export function startMockPortal(port = 0) {
         state,
         otp: OTP,
         card: CARD,
+        mobile: MOBILE,
+        feeFor,
         close: () => new Promise((done) => server.close(done)),
       });
     });

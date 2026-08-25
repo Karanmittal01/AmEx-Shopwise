@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseAmount } from '../src/flow.js';
+import { expectedCharge } from '../src/config.js';
 import { encryptVault, decryptVault } from '../src/vault.js';
 import { isDue, monthKey } from '../src/state.js';
 import { redact, registerSecret, maskCard } from '../src/log.js';
@@ -11,9 +12,27 @@ test('parseAmount handles the formats an Indian portal actually renders', () => 
   assert.equal(parseAmount('INR 1,000'), 1000);
   assert.equal(parseAmount('Total payable ₹1,000'), 1000);
   assert.equal(parseAmount('₹10,000'), 10000);
+  assert.equal(parseAmount('₹1,017.70'), 1017.7);
   assert.equal(parseAmount('free'), null);
   assert.equal(parseAmount(''), null);
   assert.equal(parseAmount(null), null);
+});
+
+test('parseAmount takes the total, not the first number in a summary block', () => {
+  const summary = 'Sub total ₹1,000.00 Convenience fee (1.5%) + GST ₹17.70 Total Amount ₹1,017.70';
+  assert.equal(parseAmount(summary), 1017.7);
+
+  // A leading count must not be mistaken for the amount.
+  assert.equal(parseAmount('1 item Total ₹1,017.70'), 1017.7);
+});
+
+test('expectedCharge matches the fee the portal actually applies', () => {
+  const expect = expectedCharge(1000);
+  assert.equal(expect.faceValue, 1000);
+  assert.equal(expect.fee, 17.7); // 1000 × 1.5% × 1.18
+  assert.equal(expect.total, 1017.7);
+  assert.ok(expect.ceiling > expect.total, 'the ceiling must leave room for rounding');
+  assert.equal(expect.floor, 800);
 });
 
 test('vault round-trips and rejects the wrong passphrase', () => {

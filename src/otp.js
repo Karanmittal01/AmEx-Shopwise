@@ -66,11 +66,35 @@ function notify(purpose) {
 const looksLikeOtp = (code) => /^\d{4,8}$/.test(String(code).trim());
 
 /**
+ * Where OTPs come from.
+ *
+ * By default the local channels below answer. In worker mode the process has no
+ * terminal and nobody can reach its filesystem, so `setOtpProvider` swaps in a
+ * function that asks the web app instead — the flow itself is unchanged either way.
+ */
+let otpProvider = null;
+
+export function setOtpProvider(fn) {
+  otpProvider = fn;
+}
+
+export function waitForOtp(purpose = 'Shopwise payment') {
+  if (otpProvider) {
+    log.info(`OTP needed (${purpose}) — asking the web app`);
+    return otpProvider(purpose).then((code) => {
+      registerSecret(code);
+      return code;
+    });
+  }
+  return waitForOtpLocally(purpose);
+}
+
+/**
  * Blocks until an OTP arrives or the timeout expires.
  * @param {string} purpose shown to you so you know which OTP is being asked for
  * @returns {Promise<string>}
  */
-export function waitForOtp(purpose = 'Shopwise payment') {
+export function waitForOtpLocally(purpose = 'Shopwise payment') {
   return new Promise((resolve, reject) => {
     let settled = false;
     const cleanups = [];

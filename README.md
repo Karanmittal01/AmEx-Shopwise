@@ -1,184 +1,195 @@
 # Amex Shopwise — Amazon Pay gift card autobuy
 
-Buys a ₹1,000 Amazon Pay gift card on the Amex Shopwise portal, once a month, six
-times. The one thing you do is send the OTP.
+Buys the ₹1,000 Amazon Pay gift card on
+[shopwise.giftstacc.com](https://shopwise.giftstacc.com/), once a month, six
+times. You tap a button in Splitwise Killer and send two OTPs. Nothing else.
 
 ```
-you                     script
- │                        │
- │                        ├─ log in (reuses the saved session when it can)
- │                        ├─ search "Amazon Pay", pick ₹1,000, add to cart
- │                        ├─ read the real total off the page and check it
- │                        ├─ fill your card details
- │   ← "OTP needed"       │
- ├─ tap the code ────────►│
- │                        ├─ submit, wait for confirmation
- │                        └─ record the run (3 of 6 done)
+  any browser, any device              this worker
+  ─────────────────────────            ───────────────────────────
+  split.karanmittal.com                Node + Chromium
+  /tools/shopwise                      + the encrypted card vault
+        │                                    │
+        │  "Buy"  ──► job queued  ◄────────── polls for work
+        │             (Postgres)              │
+        │                                     ├─ signs in
+        │  OTP box ◄── "needs OTP" ◄──────────┤
+        │  you type it ──► relayed ──────────►┤
+        │                                     ├─ ₹1,000 card → cart
+        │                                     ├─ checks the total
+        │                                     ├─ enters the card
+        │  OTP box ◄── "needs OTP" ◄──────────┤
+        │  you type it ──► relayed ──────────►┤
+        └────────── "bought, ₹1,017.70" ◄─────┘
 ```
+
+The worker only ever calls **out** to the app, so it needs no public IP, no open
+ports and no certificate of its own. The card never leaves this machine: the web
+app is told amounts, phases and order IDs, and nothing else.
 
 ## Read this before you run it
 
-- **It stops before paying by default.** `run` is a dry run: it fills the cart and
-  verifies the amount, then stops. Payment only happens with `--live`.
-- **It refuses to pay an amount it did not verify.** The flow reads the order total
-  off the checkout page. Anything other than exactly `AMOUNT` — a leftover cart
-  item, a changed price, a total it cannot parse — aborts before your card is
-  touched. There is a test for this.
-- **The selectors are guesses.** This was written without access to the live portal,
-  so the first run will need corrections. `calibrate` makes that quick. See
-  [Fixing selectors](#fixing-selectors).
-- **Your card sits on disk, encrypted.** Unattended monthly runs mean the CVV has to
-  be stored somewhere; there is no way around that. It is AES-256-GCM encrypted
-  under a scrypt-derived key rather than sitting in a plaintext `.env`. If the
-  passphrase is also on the same device (`vault.key`, for cron), someone with your
-  unlocked phone can get both. Judge that against what a ₹1,000 monthly card is
-  worth to you.
-- **The portal may not want to be automated.** Check Shopwise's terms. Anti-bot
-  measures may block a headless browser, and an account can be locked for it.
+- **It stops before paying by default.** A "Test run" fills the cart, verifies the
+  amount and stops. Only "Buy" spends money.
+- **It refuses to pay an amount it did not verify.** The worker reads the real
+  total off the checkout page and requires it to fall between the face value
+  floor and a computed ceiling. A second item in the cart, a changed fee or an
+  unparseable total all abort before the card is entered. There are tests for
+  this.
+- **You are charged more than ₹1,000.** The portal adds a convenience fee and GST
+  on that fee, so the real charge is about **₹1,017.70**:
 
-## Running it on your phone
+  ```
+  fee   = faceValue × 1.5% × 1.18   = ₹17.70
+  total = ₹1,000 + ₹17.70           = ₹1,017.70
+  ```
 
-Being blunt about this, because it decides your setup:
+  Those percentages come from the portal's own API and can change, which is why
+  the flow reads the total rather than assuming it.
+- **Two OTPs per run.** The portal signs you in by mobile number and an OTP every
+  time — there is no password to skip it with — and then the bank sends a second
+  OTP for the payment.
+- **The selectors are informed guesses.** They were written from the portal's
+  public JavaScript bundle, not from a signed-in session, so expect the first run
+  to need corrections. See [Fixing selectors](#fixing-selectors).
+- **Your card sits on disk, encrypted.** Unattended runs mean the CVV has to be
+  stored somewhere. It is AES-256-GCM encrypted under a scrypt-derived key rather
+  than sitting in a plaintext `.env`. If the passphrase lives on the same machine
+  (`vault.key`, for unattended runs) then whoever has that machine has both.
+- **The portal may not want to be automated.** Check its terms. Anti-bot measures
+  can block a headless browser, and accounts can be locked for it.
 
-| Phone | Works? | How |
+## Where the worker runs
+
+It needs Node and a real Chromium, and it has to stay alive for the few minutes a
+purchase takes. That rules out some hosts:
+
+| Host | Works? | |
 |---|---|---|
-| **Android** | Yes | Termux — the script runs on the phone itself |
-| **iPhone** | No | iOS cannot run a background browser automation. Run it on a laptop, a Raspberry Pi, or a cheap VPS, and use the phone only to send the OTP |
+| **Vercel** | No | Serverless functions are stateless and capped at 60s (Hobby) / 300s (Pro). A run takes minutes and holds a browser open. |
+| **Fly.io / Railway / Render** | Yes | A persistent container. Use the `Dockerfile`. Cheapest cloud option. |
+| **A VPS** | Yes | Hetzner, DigitalOcean, Oracle free tier. Docker or systemd. |
+| **Raspberry Pi / spare machine** | Yes | Free, and the card vault stays on hardware you own. Polls outward, so no router configuration. |
+| **Your laptop, on demand** | Yes | Start `npm run worker` when a purchase is due, tap Buy, close it afterwards. No always-on anything. |
 
-Either way the OTP step is identical: the script opens a little web page, you open
-it on your phone, you type the code.
-
-### Android (Termux)
-
-Install [Termux from F-Droid](https://f-droid.org/packages/com.termux/) — the Play
-Store build is too old.
-
-```bash
-pkg update && pkg install nodejs-lts git chromium termux-api
-git clone https://github.com/Karanmittal01/AmEx-Shopwise.git
-cd AmEx-Shopwise
-npm install
-
-# Playwright has no ARM/Android browser download, so point it at Termux's chromium
-echo "CHROMIUM_PATH=$(command -v chromium)" >> .env
-
-# Stop Android killing the process mid-purchase
-termux-wake-lock
-```
-
-Install the **Termux:API** app too, and you get a real Android notification when the
-OTP is needed.
-
-### Anywhere else (laptop, Pi, VPS)
-
-```bash
-git clone https://github.com/Karanmittal01/AmEx-Shopwise.git
-cd AmEx-Shopwise
-npm install
-npx playwright install chromium
-```
-
-Make sure the machine and your phone are on the same Wi-Fi, so the OTP page is
-reachable from the phone.
+Splitwise Killer being on Vercel is fine — only the worker needs a home.
 
 ## Setup
 
 ```bash
-cp .env.example .env      # adjust SHOPWISE_URL if the real URL differs
-node src/index.js setup   # stores login + card, encrypted
+git clone https://github.com/Karanmittal01/AmEx-Shopwise.git
+cd AmEx-Shopwise
+npm install
+npx playwright install chromium     # skip on Termux/ARM; set CHROMIUM_PATH instead
+
+cp .env.example .env
+node src/index.js setup
 ```
 
-`setup` asks for your Shopwise login, card number, expiry, CVV and a passphrase.
-Nothing is echoed to the screen. It offers to write the passphrase to `vault.key`
-(mode 0600) so cron can run unattended — say no if you would rather type it each
-month, and set `SHOPWISE_VAULT_PASS` yourself.
+`setup` asks for your Shopwise mobile number, the card, and a passphrase to
+encrypt them. Nothing is echoed to the screen and nothing is ever logged. It
+offers to write the passphrase to `vault.key` (mode 0600) so the worker can start
+unattended.
+
+Then generate a shared secret and put the **same value** in both places:
+
+```bash
+openssl rand -hex 32
+```
+
+| Where | Variable |
+|---|---|
+| this repo's `.env` | `WORKER_TOKEN` |
+| the web app's environment | `SHOPWISE_WORKER_TOKEN` |
+
+Also set `APP_URL=https://split.karanmittal.com` here, and `OWNER_EMAIL` to your
+own address in the web app — that is what makes the Tools section appear, and it
+is the only account allowed to use it.
 
 ## First run — watch it
 
-Do this once, with the browser visible, so you can see where the selectors are wrong:
+Do this once with the browser visible, so you can see which selectors are wrong:
 
 ```bash
 HEADLESS=false node src/index.js run --headful
 ```
 
-No payment happens. It should reach the cart, print
+No payment happens. It should reach the cart and print:
 
 ```
-order total on page: "Order total ₹1,000.00" → parsed 1000
-amount verified: ₹1000
+order total on page: "Total Amount ₹1,017.70" → parsed 1017.7
+expecting ~₹1017.7 (₹1000 + ₹17.7 fee at 1.5% + 18% GST), ceiling ₹1019.7
+amount verified: ₹1017.7 (fee ₹17.7)
 DRY RUN — cart is correct and the flow stopped before payment.
 ```
 
-and stop. When that works, do one live purchase by hand:
+When that works, start the worker and drive it from your phone instead:
 
 ```bash
-node src/index.js run --live
+npm run worker
 ```
 
-When it needs the OTP it prints a URL. Open it on your phone, type the code, done.
-Or `echo 123456 > otp.txt`, or `curl "http://localhost:8787/otp?code=123456"`, or
-just type it into the terminal — whichever arrives first wins.
+Open **Tools → Amazon Pay gift card** in Splitwise Killer, hit *Test run*, and
+watch it go through. Then *Buy* for the real thing.
 
-## The monthly schedule
+## Running the worker for real
 
-Once a live run has worked, hand it to cron. `--if-due` does the thinking: one
-purchase per calendar month, six in total, then it stops on its own. Firing more
-often than monthly is harmless and means a missed wake-up gets picked up later.
-
-**Linux / macOS / Pi** — `crontab -e`:
-
-```cron
-0 11 1,2,3 * * /path/to/AmEx-Shopwise/bin/shopwise-monthly.sh
-```
-
-(The 1st, 2nd and 3rd — if the phone is off on the 1st, the 2nd catches it, and the
-run on the 2nd is a no-op if the 1st already succeeded.)
-
-**Android / Termux**:
+**Docker** (any host):
 
 ```bash
-pkg install cronie termux-services
-sv-enable crond
-crontab -e     # same line as above
+docker build -t shopwise-worker .
+docker run -d --restart unless-stopped --name shopwise \
+  --env-file .env \
+  -v "$PWD/vault.enc:/app/vault.enc:ro" \
+  -v "$PWD/vault.key:/app/vault.key:ro" \
+  -v "$PWD/runs:/app/runs" \
+  shopwise-worker
 ```
 
-Install **Termux:Boot** as well so cron survives a reboot.
+The vault is mounted, never copied into the image, so it cannot end up in a layer
+you later push to a registry.
 
-Either way you get a notification when the OTP is needed. Send it and the purchase
-completes. Check progress any time:
+**systemd** (VPS or Pi):
+
+```ini
+# /etc/systemd/system/shopwise.service
+[Service]
+WorkingDirectory=/home/karan/AmEx-Shopwise
+ExecStart=/usr/bin/node src/index.js worker
+Restart=always
+RestartSec=30
+User=karan
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
-node src/index.js status
+sudo systemctl enable --now shopwise
 ```
 
-```
-Progress: 2 of 6 monthly purchases
-This month (2026-10): already purchased in 2026-10
-
-  2026-09  2026-09-01T11:00:12.001Z  success   ₹1000 — Order ID SW10482911
-  2026-10  2026-10-01T11:00:09.412Z  success   ₹1000 — Order ID SW10559120
-```
+The worker idles at essentially zero CPU between polls; Chromium only launches
+when a job actually arrives.
 
 ## Fixing selectors
 
-When a step cannot find its element the error tells you which step failed, what it
-tried, and where the screenshots are:
+When a step cannot find its element, the error says which step, what it tried,
+and where the screenshots are:
 
 ```
-Could not find "addToCart" on https://…/product.
+Could not find "addToCart" on https://shopwise.giftstacc.com/product/…
 Tried: role=button|Add to cart | text=Add to cart | css=button[data-action='add-to-cart']
 Fix it by adding a working selector under "addToCart" in selectors.local.json
 ```
 
-Dump what is actually on the page:
+Dump what is really on a page:
 
 ```bash
-node src/index.js calibrate https://www.amexshopwise.com/some/page
+node src/index.js calibrate https://shopwise.giftstacc.com/some/page
 ```
 
 That writes `runs/calibrate-*.json` listing every clickable element with its id,
-name, placeholder, test id and text. Pick one and create `selectors.local.json` in
-the project root:
+name, placeholder, test id and text. Pick one and create `selectors.local.json`:
 
 ```json
 {
@@ -187,35 +198,53 @@ the project root:
 }
 ```
 
-Your file wins over the shipped defaults for those keys, and survives updates.
+Your file replaces the shipped candidates for those keys and survives updates.
 Locator syntax: `css=`, `text=`, `role=button|Name`, `placeholder=`, `label=`,
-`testid=`. Candidates are tried in order, across every frame on the page — that is
-how the card fields inside the payment-gateway iframe get found.
+`testid=`. Candidates are tried in order across every frame on the page — that is
+how card fields inside the payment gateway's iframe get found.
+
+Since the portal is a React app with minified class names, prefer selectors based
+on visible text, placeholders and labels: those survive a rebuild, `css=.lsss3`
+does not.
+
+## Commands
+
+```
+node src/index.js setup             Store mobile + card, encrypted
+node src/index.js worker            Poll the Tools page and run purchases
+node src/index.js run [--live]      Run once from this terminal
+node src/index.js calibrate [url]   Dump a page's real selectors
+node src/index.js status            Local run history
+node src/index.js reset             Clear the local history (leaves the vault)
+```
+
+`run` is the standalone path and does not need the web app at all: it relays the
+OTP through a small local page, a file drop (`echo 123456 > otp.txt`) or the
+terminal. Useful for debugging without a round trip through Postgres.
 
 ## Configuration
 
-Everything lives in `.env` (see `.env.example`). The ones that matter:
-
 | Variable | Default | |
 |---|---|---|
-| `SHOPWISE_URL` | `https://www.amexshopwise.com/` | Portal entry point |
-| `AMOUNT` | `1000` | Denomination to buy |
-| `MAX_AMOUNT` | `1000` | Hard ceiling; refuses to pay above this |
+| `SHOPWISE_URL` | `https://shopwise.giftstacc.com/` | Portal entry point |
+| `AMOUNT` | `1000` | Gift card face value |
+| `FEE_PERCENT` / `GST_PERCENT` | `1.5` / `18` | Used for the ceiling, not to compute what you pay |
+| `MAX_AMOUNT` | derived | Absolute ceiling; overrides the computed one |
 | `TOTAL_RUNS` | `6` | Purchases before the schedule retires |
+| `APP_URL` | — | The web app, for worker mode |
+| `WORKER_TOKEN` | — | Must match `SHOPWISE_WORKER_TOKEN` in the app |
 | `HEADLESS` | `true` | `false` to watch the browser |
-| `CHROMIUM_PATH` | — | Required on Termux/ARM |
-| `OTP_PORT` | `8787` | Where the OTP page listens |
-| `OTP_TIMEOUT_MS` | `360000` | 6 minutes to send the code |
+| `CHROMIUM_PATH` | — | Needed on ARM/Termux, where Playwright has no download |
+| `OTP_TIMEOUT_MS` | `360000` | How long you have to send each code |
 
 ## What it does not do
 
-- **It does not read your SMS.** Deliberate. You see each purchase and approve it by
-  sending the code; not sending one cancels the purchase. That is the whole safety
-  model, and automating it away would remove the only human check on a script that
-  spends money.
-- **It does not retry a failed payment on its own.** A failure is recorded and the
-  month stays open, so the next cron tick tries again — but it will never fire twice
-  in a month after a success.
+- **It does not read your SMS.** Deliberate. You see each purchase and approve it
+  by sending the code; not sending one cancels it. That is the only human check
+  on a script that spends money, and automating it away would remove the point.
+- **It does not retry a failed payment by itself.** A failure is recorded and the
+  month stays open, so you can simply tap Buy again. After a success, that month
+  is closed and the sixth success retires the schedule.
 
 ## Tests
 
@@ -223,25 +252,31 @@ Everything lives in `.env` (see `.env.example`). The ones that matter:
 npm test
 ```
 
-Nine tests. The unit tests cover amount parsing, vault encryption (including
-tamper detection), the monthly scheduler and log redaction. The end-to-end tests
-run the real flow against a mock portal in `test/mock-portal.js` — login with OTP,
-search, denomination, cart, card fields inside an iframe, payment OTP,
-confirmation — and assert that a dry run never reaches the payment endpoint and
-that a tampered ₹1,500 total aborts before the card is sent.
+Fourteen tests, no network and no real money. `test/mock-portal.js` is a
+stand-in for the portal — mobile+OTP sign-in, denomination tiles, a cart showing
+the fee breakdown, card fields inside an iframe, a bank OTP step — and
+`test/mock-app.js` mirrors the Tools API. Between them they cover:
+
+- the full purchase, end to end, including both OTPs relayed through the web app
+- a dry run never reaching the payment endpoint
+- a total above the ceiling aborting **before** the card is submitted
+- the real ₹17.70 fee being accepted rather than treated as tampering
+- card number, CVV and OTP never appearing in logs or error reports
+- vault encryption, tamper detection, and the one-per-month schedule
 
 ## Files
 
 ```
-src/index.js       CLI: setup, calibrate, run, status, reset
+src/index.js       CLI: setup, worker, run, calibrate, status, reset
+src/worker.js      the polling loop that talks to Splitwise Killer
+src/remote.js      Tools API client (claim, progress, OTP, finish)
 src/flow.js        the purchase flow and the amount guardrail
 src/locate.js      multi-candidate, multi-frame element finding
 src/selectors.json default selectors — override in selectors.local.json
-src/otp.js         the OTP relay (web page, file drop, terminal)
+src/otp.js         OTP relay for standalone runs
 src/vault.js       AES-256-GCM encrypted card storage
-src/state.js       one per month, six in total
 src/log.js         logging with secret redaction
 ```
 
-`vault.enc`, `vault.key`, `.env`, `state.json` and `runs/` are gitignored. Keep it
-that way.
+`vault.enc`, `vault.key`, `.env`, `state.json` and `runs/` are gitignored. Keep
+it that way.

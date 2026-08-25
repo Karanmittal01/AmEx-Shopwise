@@ -10,6 +10,7 @@
     "setup": "node src/index.js setup",
     "calibrate": "node src/index.js calibrate",
     "run": "node src/index.js run",
+    "worker": "node src/index.js worker",
     "status": "node src/index.js status",
     "test": "node --test --test-concurrency=1 test/*.test.js"
   },

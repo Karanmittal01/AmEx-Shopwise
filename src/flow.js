@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { config } from './config.js';
+import { config, expectedCharge } from './config.js';
 import { log, maskCard } from './log.js';
 import { find, findOptional, clickStep, fillStep } from './locate.js';
 import { waitForOtp } from './otp.js';
@@ -41,12 +41,27 @@ async function safeScreenshot(page, file) {
   }
 }
 
-/** "₹1,000.00" / "Rs. 1000" / "INR 1,000" → 1000 */
+/**
+ * "₹1,000.00" / "Rs. 1000" / "INR 1,000" → 1000
+ *
+ * Prefers a number attached to a currency marker, and takes the last one, because
+ * the element matched is often a whole summary block ("Sub total ₹1,000
+ * Convenience fee ₹17.70 Total ₹1,017.70") where the figure that matters is the
+ * final one. Falls back to the first bare number when nothing is marked.
+ */
 export function parseAmount(text) {
   if (!text) return null;
-  const match = String(text).replace(/\s/g, '').match(/(\d[\d,]*(?:\.\d{1,2})?)/);
-  if (!match) return null;
-  const value = Number(match[1].replace(/,/g, ''));
+  const flat = String(text).replace(/\s/g, '');
+
+  const marked = [...flat.matchAll(/(?:₹|Rs\.?|INR)([\d,]+(?:\.\d{1,2})?)/gi)];
+  if (marked.length > 0) {
+    const value = Number(marked[marked.length - 1][1].replace(/,/g, ''));
+    if (Number.isFinite(value)) return value;
+  }
+
+  const bare = flat.match(/(\d[\d,]*(?:\.\d{1,2})?)/);
+  if (!bare) return null;
+  const value = Number(bare[1].replace(/,/g, ''));
   return Number.isFinite(value) ? value : null;
 }
 
@@ -55,6 +70,8 @@ export async function launchBrowser() {
   const context = await chromium.launchPersistentContext(config.profileDir, {
     headless: config.headless,
     executablePath: config.executablePath,
+    proxy: config.proxyServer ? { server: config.proxyServer } : undefined,
+    ignoreHTTPSErrors: config.ignoreHttpsErrors,
     slowMo: config.slowMoMs,
     viewport: { width: 1280, height: 900 },
     locale: 'en-IN',
@@ -66,11 +83,20 @@ export async function launchBrowser() {
   return context;
 }
 
+/**
+ * Signs in.
+ *
+ * The portal identifies you by mobile number or email and then sends an OTP —
+ * there is usually no password at all. So an OTP on every run is the normal path,
+ * not the exception; the saved browser profile only helps while its session is
+ * still alive. A password field is filled if one happens to be shown and a
+ * password is stored, which keeps this working if the portal changes its mind.
+ */
 async function ensureLoggedIn(page, sel, vault) {
   log.step('checking session');
   const marker = await findOptional(page, 'loggedInMarker', sel.loggedInMarker, { timeout: 8000 });
   if (marker) {
-    log.info('already logged in (reused browser profile)');
+    log.info('already logged in (saved session still valid)');
     return;
   }
 
@@ -78,16 +104,31 @@ async function ensureLoggedIn(page, sel, vault) {
   const loginLink = await findOptional(page, 'loginLink', sel.loginLink, { timeout: 8000 });
   if (loginLink) await loginLink.click();
 
-  await fillStep(page, 'username', sel.username, vault.portalUsername);
-  await fillStep(page, 'password', sel.password, vault.portalPassword);
+  const identifier = vault.portalMobile || vault.portalEmail || vault.portalUsername;
+  if (!identifier) {
+    throw new Error('No mobile number or email stored. Re-run `setup`.');
+  }
+  await fillStep(page, 'loginIdentifier', sel.loginIdentifier, identifier);
+
+  const passwordField = await findOptional(page, 'password', sel.password, { timeout: 4000 });
+  if (passwordField && vault.portalPassword) {
+    await passwordField.fill(vault.portalPassword);
+    log.step('filled password');
+  }
+
   await clickStep(page, 'loginSubmit', sel.loginSubmit);
 
-  // Login may or may not demand its own OTP.
-  const otpField = await findOptional(page, 'loginOtp', sel.loginOtp, { timeout: 15_000 });
+  const otpField = await findOptional(page, 'loginOtp', sel.loginOtp, { timeout: 25_000 });
   if (otpField) {
-    const code = await waitForOtp('Shopwise login');
+    const code = await waitForOtp(`Shopwise login for ${identifier}`);
     await otpField.fill(code);
-    await clickStep(page, 'loginOtpSubmit', sel.loginOtpSubmit);
+    const submit = await findOptional(page, 'loginOtpSubmit', sel.loginOtpSubmit, {
+      timeout: 5000,
+    });
+    // Some OTP modals submit themselves once the last digit lands.
+    if (submit) await submit.click();
+  } else {
+    log.warn('no login OTP was asked for — the portal may have kept the session alive');
   }
 
   await find(page, 'loggedInMarker', sel.loggedInMarker, { timeout: 45_000 });
@@ -136,8 +177,14 @@ async function chooseAmount(page, sel) {
 
 /**
  * The single most important guardrail: read the real total off the page and refuse
- * to pay anything the script did not expect. A bot that pays an unverified number
+ * to pay anything outside the expected range. A bot that pays an unverified number
  * is a bug waiting to cost money.
+ *
+ * The total is NOT the face value. The portal adds a convenience fee plus GST, so
+ * a ₹1,000 card is charged at about ₹1,017.70. Rather than hardcode those
+ * percentages — the portal serves them from its API and can change them — this
+ * accepts anything between the face value floor and a computed ceiling, and logs
+ * the fee it actually inferred so a change is visible in the run log.
  */
 async function verifyTotal(page, sel) {
   const totalEl = await findOptional(page, 'orderTotal', sel.orderTotal, { timeout: 10_000 });
@@ -150,23 +197,42 @@ async function verifyTotal(page, sel) {
 
   const text = await totalEl.innerText();
   const total = parseAmount(text);
+  const expect = expectedCharge(config.amount);
   log.info(`order total on page: ${JSON.stringify(text.trim())} → parsed ${total}`);
+  log.info(
+    `expecting ~${config.currencySymbol}${expect.total} ` +
+      `(${config.currencySymbol}${expect.faceValue} + ${config.currencySymbol}${expect.fee} ` +
+      `fee at ${config.feePercent}% + ${config.gstPercent}% GST), ` +
+      `ceiling ${config.currencySymbol}${expect.ceiling}`,
+  );
 
   if (total === null) {
     throw new Error(`Could not parse an amount out of ${JSON.stringify(text)}. Refusing to pay.`);
   }
-  if (total !== config.amount) {
+  if (total > expect.ceiling) {
     throw new Error(
-      `Order total is ${total} but expected ${config.amount}. Refusing to pay. ` +
-        'Check the cart — it may have leftover items from a previous run.',
+      `Order total ${config.currencySymbol}${total} exceeds the ceiling of ` +
+        `${config.currencySymbol}${expect.ceiling}. Refusing to pay. Either the fee went up ` +
+        '(raise FEE_PERCENT/GST_PERCENT) or the cart holds more than one item.',
     );
   }
-  if (total > config.maxAmount) {
-    throw new Error(`Order total ${total} exceeds MAX_AMOUNT ${config.maxAmount}. Refusing to pay.`);
+  if (total < expect.floor) {
+    throw new Error(
+      `Order total ${config.currencySymbol}${total} is below ${config.currencySymbol}${expect.floor}, ` +
+        `so the cart probably holds the wrong denomination. Expected a ` +
+        `${config.currencySymbol}${expect.faceValue} card. Refusing to pay.`,
+    );
   }
-  log.info(`amount verified: ${config.currencySymbol}${total}`);
-  return total;
+
+  const impliedFee = round2(total - expect.faceValue);
+  log.info(
+    `amount verified: ${config.currencySymbol}${total} ` +
+      `(fee ${config.currencySymbol}${impliedFee})`,
+  );
+  return { total, faceValue: expect.faceValue, fee: impliedFee };
 }
+
+const round2 = (n) => Math.round(n * 100) / 100;
 
 async function fillCard(page, sel, vault) {
   log.step(`entering card ${maskCard(vault.cardNumber)}`);
@@ -221,17 +287,26 @@ async function setValue(locator, value) {
  * @param {object} opts.selectors selector map
  * @param {boolean} opts.live when false, stops immediately before the payment submit
  * @param {string} opts.runDir where screenshots and the log go
+ * @param {(update: object) => Promise<void>} [opts.onProgress] phase updates, for a remote UI
  */
-export async function runPurchase({ vault, selectors: sel, live, runDir }) {
+export async function runPurchase({ vault, selectors: sel, live, runDir, onProgress }) {
+  const report = async (update) => {
+    if (onProgress) await onProgress(update).catch((err) => log.warn('progress:', err.message));
+  };
+
   const context = await launchBrowser();
   const page = context.pages()[0] || (await context.newPage());
   const shot = (name) => safeScreenshot(page, path.join(runDir, `${name}.png`));
 
   try {
     log.step(`opening ${config.baseUrl}`);
+    await report({ phase: 'opening' });
     await page.goto(config.baseUrl, { waitUntil: 'domcontentloaded' });
 
+    await report({ phase: 'logging-in' });
     await ensureLoggedIn(page, sel, vault);
+
+    await report({ phase: 'finding-product' });
     await findProduct(page, sel);
     await shot('01-product');
 
@@ -243,15 +318,17 @@ export async function runPurchase({ vault, selectors: sel, live, runDir }) {
     await page.waitForLoadState('domcontentloaded').catch(() => {});
     await shot('02-cart');
 
-    const total = await verifyTotal(page, sel);
+    const charge = await verifyTotal(page, sel);
+    await report({ phase: 'verified', ...charge });
 
     if (!live) {
       await shot('03-dry-run-stop');
       log.info('DRY RUN — cart is correct and the flow stopped before payment.');
       log.info('Re-run with --live to actually pay.');
-      return { status: 'dry-run', total };
+      return { status: 'dry-run', ...charge };
     }
 
+    await report({ phase: 'paying', ...charge });
     await clickStep(page, 'checkout', sel.checkout);
     await page.waitForLoadState('domcontentloaded').catch(() => {});
 
@@ -263,7 +340,8 @@ export async function runPurchase({ vault, selectors: sel, live, runDir }) {
     log.step('waiting for the bank OTP page');
     const otpField = await find(page, 'paymentOtp', sel.paymentOtp, { timeout: 90_000 });
     const code = await waitForOtp(
-      `${config.currencySymbol}${total} Amazon Pay gift card on card ${maskCard(vault.cardNumber)}`,
+      `${config.currencySymbol}${charge.total} Amazon Pay gift card ` +
+        `on card ${maskCard(vault.cardNumber)}`,
     );
     await otpField.fill(code);
     await clickStep(page, 'paymentOtpSubmit', sel.paymentOtpSubmit);
@@ -277,7 +355,7 @@ export async function runPurchase({ vault, selectors: sel, live, runDir }) {
 
     await shot('04-confirmed');
     log.info(`purchase complete${orderId ? ` — ${orderId}` : ''}`);
-    return { status: 'success', total, orderId };
+    return { status: 'success', ...charge, orderId };
   } catch (err) {
     await shot('99-failure').catch(() => {});
     throw err;

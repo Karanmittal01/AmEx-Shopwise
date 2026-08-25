@@ -31,19 +31,36 @@ const num = (v, fallback) => (v === undefined || v === '' ? fallback : Number(v)
 const bool = (v, fallback) => (v === undefined || v === '' ? fallback : /^(1|true|yes)$/i.test(v));
 
 export const config = {
-  /** Portal entry point. Override in .env if the portal moves. */
-  baseUrl: process.env.SHOPWISE_URL || 'https://www.amexshopwise.com/',
+  /** Portal entry point. */
+  baseUrl: process.env.SHOPWISE_URL || 'https://shopwise.giftstacc.com/',
 
-  /** What to buy. */
+  /** What to buy. `amount` is the gift card's face value, before fees. */
   searchTerm: process.env.SEARCH_TERM || 'Amazon Pay',
   amount: num(process.env.AMOUNT, 1000),
   currencySymbol: process.env.CURRENCY_SYMBOL || '₹',
 
   /**
-   * Hard ceiling. The flow reads the real order total off the checkout page and
-   * refuses to pay if it exceeds this. Keep it tight.
+   * The portal adds a convenience fee plus GST on top of the face value, so the
+   * amount actually charged is more than `amount`:
+   *
+   *   fee   = (faceValue − discount) × feePercent/100 × (1 + gstPercent/100)
+   *   total = faceValue + fee
+   *
+   * For a ₹1,000 card at 1.5% + 18% GST that is ₹17.70, so ₹1,017.70 is charged.
+   * These percentages come from the portal's API at runtime, so the flow reads
+   * the real total off the page — these values only set the ceiling it is
+   * allowed to fall under.
    */
-  maxAmount: num(process.env.MAX_AMOUNT, num(process.env.AMOUNT, 1000)),
+  feePercent: num(process.env.FEE_PERCENT, 1.5),
+  gstPercent: num(process.env.GST_PERCENT, 18),
+  /** Slack above the computed total, for rounding differences. */
+  feeToleranceRupees: num(process.env.FEE_TOLERANCE, 2),
+
+  /**
+   * Absolute ceiling on what may be paid. Leave unset to derive it from the fee
+   * percentages above, which is the safer default because it moves with AMOUNT.
+   */
+  maxAmountOverride: process.env.MAX_AMOUNT ? Number(process.env.MAX_AMOUNT) : null,
 
   /** Total number of monthly purchases before the schedule retires itself. */
   totalRuns: num(process.env.TOTAL_RUNS, 6),
@@ -52,6 +69,15 @@ export const config = {
   otpPort: num(process.env.OTP_PORT, 8787),
   otpTimeoutMs: num(process.env.OTP_TIMEOUT_MS, 6 * 60 * 1000),
   otpFile: path.join(ROOT, 'otp.txt'),
+  otpPollMs: num(process.env.OTP_POLL_MS, 2000),
+
+  /**
+   * Worker mode: where the Splitwise Killer Tools page lives, and the shared
+   * secret that authenticates this worker to it.
+   */
+  appUrl: process.env.APP_URL || '',
+  workerToken: process.env.WORKER_TOKEN || '',
+  pollIntervalMs: num(process.env.POLL_INTERVAL_MS, 15_000),
 
   /** Browser. */
   headless: bool(process.env.HEADLESS, true),
@@ -67,12 +93,39 @@ export const config = {
    */
   executablePath: process.env.CHROMIUM_PATH || undefined,
 
+  /** Optional upstream proxy, e.g. http://127.0.0.1:8080. Rarely needed. */
+  proxyServer: process.env.PROXY_SERVER || undefined,
+  ignoreHttpsErrors: bool(process.env.IGNORE_HTTPS_ERRORS, false),
+
   /** Paths. */
   vaultFile: path.join(ROOT, 'vault.enc'),
   stateFile: path.join(ROOT, 'state.json'),
-  runsDir: path.join(ROOT, 'runs'),
+  runsDir: process.env.RUNS_DIR || path.join(ROOT, 'runs'),
   selectorsFile: path.join(ROOT, 'src', 'selectors.json'),
 };
+
+/**
+ * The fee the portal is expected to add, and the highest total the flow may pay.
+ * Exported so the UI can show the expected charge before anything is spent.
+ */
+export function expectedCharge(faceValue = config.amount) {
+  const fee = faceValue * (config.feePercent / 100) * (1 + config.gstPercent / 100);
+  const total = faceValue + fee;
+  const ceiling =
+    config.maxAmountOverride !== null
+      ? config.maxAmountOverride
+      : total + config.feeToleranceRupees;
+  return {
+    faceValue,
+    fee: round2(fee),
+    total: round2(total),
+    ceiling: round2(ceiling),
+    // Below this the cart almost certainly holds the wrong denomination.
+    floor: round2(faceValue * 0.8),
+  };
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
 
 export function loadSelectors() {
   const raw = fs.readFileSync(config.selectorsFile, 'utf8');
