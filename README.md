@@ -4,13 +4,28 @@ Buys the ₹1,000 Amazon Pay gift card on
 [shopwise.giftstacc.com](https://shopwise.giftstacc.com/). You tap Buy on your
 phone and send the two OTPs. That's the whole thing.
 
-## Use it
+## Use it — Android phone only, no laptop
+
+See [`docs/android.md`](docs/android.md) for the full copy-paste, but it comes
+down to installing **Termux** (a free terminal app) and then:
 
 ```bash
-npm install && npx playwright install chromium
-npm run setup     # once: your mobile number and card, encrypted on this machine
+npm run setup     # once: your mobile number and card, encrypted on this phone
 npm run buy       # every time
 ```
+
+`npm run buy` prints a link. Open it in your phone's browser (it's the same
+phone, so `localhost` just works), tap **Buy**, and type each OTP as it arrives.
+Add the link to your home screen and it behaves like an app.
+
+That's it. One app, one command. No cloud, no server, no laptop, nothing to pay
+for.
+
+---
+
+**On a laptop instead?** Same two commands after
+`npm install && npx playwright install chromium`; `npm run buy` prints a
+`192.168.x.x` link to open on your phone over the same Wi-Fi.
 
 `npm run buy` prints a URL:
 
@@ -58,34 +73,25 @@ exactly this: tap once, type twice.
 - **Nothing sensitive is written down.** The card is AES-256-GCM encrypted at
   rest, never logged, and blurred out of the screenshots taken when a step fails.
 
-## When a step breaks
+## When a step breaks — just tap it
 
 The selectors were written from the portal's public JavaScript, not a live
-session, so expect to fix a few the first time. The error tells you which step
-and what it tried:
+session, so a step will sometimes fail to find its button the first time. You
+don't fix that in a file. The phone page shows you the buttons it *did* find and
+asks:
 
-```
-Could not find "addToCart" on https://shopwise.giftstacc.com/...
-Tried: role=button|Add to cart | text=Add to cart | ...
-```
+> **Which one is it?**
+> Couldn't find the **addToCart** button. Tap it in the list below.
+> `button: Add to cart` · `button: ₹1,000` · `link: Cart` · …
 
-Dump what's really on that page:
+Tap the right one and it carries on — and remembers, so it never asks for that
+step again. That's the whole repair: no terminal, no JSON, no re-run.
 
-```bash
-node src/index.js calibrate https://shopwise.giftstacc.com/<page>
-```
+(Under the hood it saves your choice to `selectors.local.json`. You never have to
+open that file, but if you ever want to, it's plain text and yours to edit.)
 
-Pick the right element out of `runs/calibrate-*.json` and put it in
-`selectors.local.json`:
-
-```json
-{ "addToCart": ["css=#the-real-id", "role=button|Buy now"] }
-```
-
-Re-run. Prefer text, placeholder and label selectors over class names — it's a
-React build and class names change on every deploy.
-
-Screenshots and a scrubbed log for every run land in `runs/`.
+Screenshots and a scrubbed log for every run land in `runs/`, if a step ever
+fails in a way tapping can't fix.
 
 ## Progress
 

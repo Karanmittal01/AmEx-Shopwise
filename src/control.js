@@ -30,10 +30,12 @@ export function startControlServer({ port = 8787, amount, currency = '₹' } = {
     orderId: null,
     error: null,
     otp: { pending: false, purpose: null },
+    pick: { pending: false, name: null, choices: [] },
   };
 
   let startResolve = null;
   let otpResolve = null;
+  let pickResolve = null;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -67,6 +69,17 @@ export function startControlServer({ port = 8787, amount, currency = '₹' } = {
       return json(res, { ok: true });
     }
 
+    if (url.pathname === '/pick' && req.method === 'POST') {
+      const index = Number((await body(req)).index);
+      if (pickResolve && Number.isInteger(index)) {
+        state.pick = { pending: false, name: null, choices: [] };
+        state.message = 'Got it, carrying on…';
+        pickResolve(index);
+        pickResolve = null;
+      }
+      return json(res, { ok: true });
+    }
+
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page({ amount, currency }));
   });
@@ -87,7 +100,9 @@ export function startControlServer({ port = 8787, amount, currency = '₹' } = {
   });
 
   return listening.then(() => ({
-    urls: addresses(port),
+    // port 0 asks the OS for a free port; report the one actually bound.
+    port: server.address().port,
+    urls: addresses(server.address().port),
 
     /** Blocks until Buy or Test run is tapped, and resolves to which. */
     waitForStart: () => new Promise((resolve) => {
@@ -103,6 +118,18 @@ export function startControlServer({ port = 8787, amount, currency = '₹' } = {
         log.info(`OTP needed: ${purpose}`);
       }),
 
+    /**
+     * Ask the phone to pick the right element for a step the flow could not find.
+     * @returns {Promise<number>} the chosen index
+     */
+    requestPick: (name, labels) =>
+      new Promise((resolve) => {
+        state.pick = { pending: true, name, choices: labels };
+        state.message = `Help needed: pick the "${name}" button`;
+        pickResolve = resolve;
+        log.info(`waiting for you to pick "${name}" on the page`);
+      }),
+
     setPhase(update) {
       state.phase = update.phase;
       state.message = PHASES[update.phase] ?? update.phase;
@@ -114,6 +141,7 @@ export function startControlServer({ port = 8787, amount, currency = '₹' } = {
       state.stage = result.error ? 'failed' : 'done';
       state.phase = null;
       state.otp = { pending: false, purpose: null };
+      state.pick = { pending: false, name: null, choices: [] };
       state.total = result.total ?? state.total;
       state.orderId = result.orderId ?? null;
       state.error = result.error ?? null;
@@ -216,6 +244,22 @@ function money(n) {
 }
 
 function render(s) {
+  if (s.pick.pending) {
+    el.innerHTML =
+      '<p style="margin:0 0 .25rem"><b>Which one is it?</b></p>' +
+      '<p class="sub" style="margin:0 0 1rem">Couldn\\'t find the <b>' + esc(s.pick.name) +
+        '</b> button. Tap it in the list below.</p>' +
+      '<div id="choices">' +
+      s.pick.choices.map((label, i) =>
+        '<button class="ghost pick" data-i="' + i + '" style="text-align:left">' +
+          esc(label) + '</button>').join('') +
+      '</div>';
+    for (const b of document.querySelectorAll('.pick')) {
+      b.onclick = () => post('/pick', { index: Number(b.dataset.i) });
+    }
+    return;
+  }
+
   if (s.otp.pending) {
     el.innerHTML =
       '<p style="margin:0 0 .75rem"><b>Enter the OTP</b></p>' +
@@ -264,12 +308,19 @@ function esc(t) {
   return String(t).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 }
 
+let renderedPick = '';
+
 async function tick() {
   if (sending) return;
   try {
     const s = await (await fetch('/state', { cache: 'no-store' })).json();
     // Don't repaint the OTP box under the user's fingers while they type.
-    if (!(s.otp.pending && document.getElementById('code')?.value)) render(s);
+    if (s.otp.pending && document.getElementById('code')?.value) return;
+    // Don't rebuild an unchanged pick list under a tapping finger every poll.
+    const pickKey = s.pick.pending ? s.pick.name + ':' + s.pick.choices.length : '';
+    if (pickKey && pickKey === renderedPick) return;
+    renderedPick = pickKey;
+    render(s);
   } catch {}
 }
 

@@ -45,6 +45,20 @@ function build(scope, spec) {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/**
+ * Optional last resort when every candidate for a step misses.
+ *
+ * Set by `buy` to the tap-to-fix picker: instead of aborting, it shows the
+ * elements actually on the page on your phone, you tap the right one, and the
+ * choice is saved so it never has to be asked again. `find` calls this only
+ * after exhausting its candidates, so a correct guess costs nothing.
+ */
+let assistProvider = null;
+
+export function setAssistProvider(fn) {
+  assistProvider = fn;
+}
+
 async function firstVisible(scope, spec) {
   const locator = build(scope, spec);
   const count = await locator.count();
@@ -60,7 +74,12 @@ async function firstVisible(scope, spec) {
  * @returns {Promise<import('playwright').Locator>}
  * @throws if nothing resolves before the deadline
  */
-export async function find(page, name, candidates, { timeout = config.stepTimeoutMs } = {}) {
+export async function find(
+  page,
+  name,
+  candidates,
+  { timeout = config.stepTimeoutMs, assist = true } = {},
+) {
   if (!candidates || candidates.length === 0) {
     throw new Error(`No selector candidates configured for step "${name}".`);
   }
@@ -84,6 +103,12 @@ export async function find(page, name, candidates, { timeout = config.stepTimeou
     await page.waitForTimeout(500);
   }
 
+  // Nothing matched. Before giving up, offer the tap-to-fix picker if one is set.
+  if (assist && assistProvider) {
+    const picked = await assistProvider({ page, name, candidates });
+    if (picked) return picked;
+  }
+
   throw new Error(
     `Could not find "${name}" on ${page.url()}.\n` +
       `Tried: ${candidates.join(' | ')}\n` +
@@ -93,11 +118,26 @@ export async function find(page, name, candidates, { timeout = config.stepTimeou
   );
 }
 
-/** Like `find`, but returns null instead of throwing. For genuinely optional steps. */
+/** Resolve a single selector to the first visible element across all frames, or null. */
+export async function resolveSelector(page, spec) {
+  for (const frame of page.frames()) {
+    const found = await firstVisible(frame, spec).catch(() => null);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Like `find`, but returns null instead of throwing. For genuinely optional steps.
+ *
+ * Assist is off here: an optional step that misses is *meant* to be skipped, so it
+ * must never pop the tap-to-fix picker — otherwise "are we already logged in?"
+ * would stop and ask you to point at a logout button that isn't there.
+ */
 export async function findOptional(page, name, candidates, { timeout = 5000 } = {}) {
   if (!candidates || candidates.length === 0) return null;
   try {
-    return await find(page, name, candidates, { timeout });
+    return await find(page, name, candidates, { timeout, assist: false });
   } catch {
     log.info(`  ↳ optional step "${name}" not present, skipping`);
     return null;

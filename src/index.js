@@ -8,6 +8,8 @@ import { saveVault, loadVault, vaultExists } from './vault.js';
 import { runPurchase, launchBrowser } from './flow.js';
 import { startControlServer } from './control.js';
 import { setOtpProvider } from './otp.js';
+import { setAssistProvider } from './locate.js';
+import { makeAssistProvider } from './assist.js';
 import { loadState, saveState, isDue, recordRun, successfulRuns, monthKey } from './state.js';
 
 const USAGE = `
@@ -236,6 +238,8 @@ async function cmdBuy() {
   const runDir = path.join(config.runsDir, new Date().toISOString().replace(/[:.]/g, '-'));
   openRunLog(runDir);
   setOtpProvider(control.requestOtp);
+  // When a step can't find its element, ask the phone to point at it.
+  setAssistProvider(makeAssistProvider(control));
 
   try {
     const result = await runPurchase({
@@ -267,6 +271,7 @@ async function cmdBuy() {
   } finally {
     closeRunLog();
     setOtpProvider(null);
+    setAssistProvider(null);
     // The page stays up so the result is readable on the phone.
   }
 }
