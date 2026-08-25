@@ -66,7 +66,13 @@ export function parseAmount(text) {
 }
 
 export async function launchBrowser() {
-  log.info(`launching chromium (headless=${config.headless})`);
+  log.info(`launching chromium (headless=${config.headless}, no-sandbox=${config.noSandbox})`);
+  const args = ['--disable-blink-features=AutomationControlled'];
+  if (config.noSandbox) {
+    // Required inside a Termux proot / any root container: Chromium refuses to
+    // start its sandbox as root, and /dev/shm is usually too small there.
+    args.push('--no-sandbox', '--disable-dev-shm-usage');
+  }
   const context = await chromium.launchPersistentContext(config.profileDir, {
     headless: config.headless,
     executablePath: config.executablePath,
@@ -76,7 +82,7 @@ export async function launchBrowser() {
     viewport: { width: 1280, height: 900 },
     locale: 'en-IN',
     timezoneId: 'Asia/Kolkata',
-    args: ['--disable-blink-features=AutomationControlled'],
+    args,
   });
   context.setDefaultTimeout(config.stepTimeoutMs);
   context.setDefaultNavigationTimeout(config.navTimeoutMs);

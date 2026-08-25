@@ -3,6 +3,12 @@
 Everything runs on the phone itself. You install one app (Termux), paste a few
 lines once, and after that it's `npm run buy` whenever you want a gift card.
 
+> **Why the extra step below?** Termux removed Chromium from its own repos, so
+> `pkg install chromium` no longer works (that's the `Unable to locate package
+> chromium` error). The fix is to run a small Debian system *inside* Termux,
+> where Chromium installs and runs normally. It's all copy-paste — you don't need
+> to understand it.
+
 ## One-time setup
 
 ### 1. Install Termux
@@ -15,24 +21,36 @@ is old and won't work:
 3. Also install **Termux:API** the same way (it lets the phone buzz you when an
    OTP is needed).
 
-### 2. Paste this into Termux
+### 2. Set up Debian inside Termux
 
-Open Termux and paste these lines (long-press to paste). It installs the tools,
-downloads the project, and points it at the phone's own Chromium:
+Open Termux and paste this (long-press → Paste). It installs Debian and drops you
+inside it:
 
 ```bash
-pkg update -y && pkg install -y nodejs git chromium termux-api
+pkg update -y && pkg install -y proot-distro termux-api
+proot-distro install debian
+proot-distro login debian
+```
+
+Your prompt changes (it now says `root@localhost`) — that means you're inside
+Debian. **Everything from here runs inside Debian.**
+
+### 3. Paste this inside Debian
+
+```bash
+apt update && apt install -y nodejs npm git chromium
 git clone -b claude/amex-shopwise-amazon-pay-script-btoe42 https://github.com/Karanmittal01/AmEx-Shopwise.git
 cd AmEx-Shopwise
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 npm install
 cp .env.example .env
 echo "CHROMIUM_PATH=$(command -v chromium)" >> .env
-termux-wake-lock
 ```
 
-`termux-wake-lock` stops Android from freezing the app mid-purchase.
+Chromium runs without its sandbox automatically here (it has to, inside Debian),
+so there's nothing else to configure.
 
-### 3. Store your details
+### 4. Store your details
 
 ```bash
 npm run setup
@@ -44,12 +62,16 @@ remember it on this phone). Nothing you type is shown on screen.
 
 ## Every purchase
 
-In Termux:
+Open Termux and paste these three lines:
 
 ```bash
-cd AmEx-Shopwise
-npm run buy
+termux-wake-lock
+proot-distro login debian
+cd AmEx-Shopwise && npm run buy
 ```
+
+(The first keeps Android from freezing it mid-purchase; the second steps into
+Debian; the third runs it.)
 
 It prints a link like `http://localhost:8787/`. **Tap it** (Termux makes links
 tappable) — it opens in your phone browser. Then:
@@ -69,12 +91,12 @@ Bought, you can close everything.
 ### Make the link a home-screen icon
 
 In your browser, open `http://localhost:8787/` while a purchase is running, then
-**⋮ → Add to Home screen**. Next month, start `npm run buy` in Termux, then tap
-that icon.
+**⋮ → Add to Home screen**. Next month, run the three lines above in Termux, then
+tap that icon.
 
 ## If the phone sleeps or Wi-Fi drops mid-purchase
 
-Just start over — `npm run buy` again. Nothing is charged unless you reach the
+Just start over — the three lines again. Nothing is charged unless you reach the
 payment OTP and send it, and a half-finished attempt leaves the month open, so
 running it again is always safe.
 

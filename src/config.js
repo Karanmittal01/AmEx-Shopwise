@@ -93,6 +93,16 @@ export const config = {
    */
   executablePath: process.env.CHROMIUM_PATH || undefined,
 
+  /**
+   * Chromium won't run its sandbox as root, which is exactly the situation inside
+   * a Termux proot. Default to no-sandbox when we are root; a normal laptop user
+   * keeps the sandbox. Force either way with NO_SANDBOX.
+   */
+  noSandbox: bool(
+    process.env.NO_SANDBOX,
+    typeof process.getuid === 'function' && process.getuid() === 0,
+  ),
+
   /** Optional upstream proxy, e.g. http://127.0.0.1:8080. Rarely needed. */
   proxyServer: process.env.PROXY_SERVER || undefined,
   ignoreHttpsErrors: bool(process.env.IGNORE_HTTPS_ERRORS, false),
