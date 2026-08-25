@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseAmount } from '../src/flow.js';
 import { expectedCharge } from '../src/config.js';
-import { encryptVault, decryptVault } from '../src/vault.js';
+import { encryptVault, decryptVault, loadVault, vaultExists } from '../src/vault.js';
 import { isDue, monthKey } from '../src/state.js';
 import { redact, registerSecret, maskCard } from '../src/log.js';
 
@@ -51,6 +51,30 @@ test('vault tampering is detected by the GCM tag', () => {
   bytes[0] ^= 0xff;
   payload.data = bytes.toString('base64');
   assert.throws(() => decryptVault(JSON.stringify(payload), 'pass'));
+});
+
+test('the vault can be supplied as a secret instead of a file', async () => {
+  const secret = { portalMobile: '9876500000', cardNumber: '4111111111111111', cardCvv: '4821' };
+  const blob = encryptVault(secret, 'a passphrase');
+
+  const previousVault = process.env.SHOPWISE_VAULT_B64;
+  const previousPass = process.env.SHOPWISE_VAULT_PASS;
+  try {
+    process.env.SHOPWISE_VAULT_B64 = Buffer.from(blob, 'utf8').toString('base64');
+    process.env.SHOPWISE_VAULT_PASS = 'a passphrase';
+
+    assert.equal(vaultExists(), true, 'a vault in a secret counts as present');
+    assert.deepEqual(await loadVault(), secret);
+
+    // The wrong passphrase must fail the same way it does for a file.
+    process.env.SHOPWISE_VAULT_PASS = 'not the passphrase';
+    await assert.rejects(loadVault(), /Could not decrypt/);
+  } finally {
+    if (previousVault === undefined) delete process.env.SHOPWISE_VAULT_B64;
+    else process.env.SHOPWISE_VAULT_B64 = previousVault;
+    if (previousPass === undefined) delete process.env.SHOPWISE_VAULT_PASS;
+    else process.env.SHOPWISE_VAULT_PASS = previousPass;
+  }
 });
 
 test('scheduler allows one purchase per month, six in total', () => {

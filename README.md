@@ -149,6 +149,22 @@ docker run -d --restart unless-stopped --name shopwise \
 The vault is mounted, never copied into the image, so it cannot end up in a layer
 you later push to a registry.
 
+**Fly.io** (no hardware of your own):
+
+```bash
+fly launch --no-deploy            # detects the Dockerfile
+fly secrets set \
+  APP_URL="https://split.karanmittal.com" \
+  WORKER_TOKEN="<the same token as the web app>" \
+  SHOPWISE_VAULT_PASS="<your vault passphrase>" \
+  SHOPWISE_VAULT_B64="$(base64 -w0 vault.enc)"
+fly deploy
+```
+
+The vault travels as ciphertext in a secret, so there is no volume to manage and
+nothing sensitive in the image. Opening it still needs the passphrase, so one
+leaked secret is not enough on its own.
+
 **systemd** (VPS or Pi):
 
 ```ini

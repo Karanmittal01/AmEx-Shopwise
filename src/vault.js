@@ -68,8 +68,27 @@ export function saveVault(data, passphrase) {
   fs.chmodSync(config.vaultFile, 0o600);
 }
 
+/**
+ * The encrypted vault, from wherever it lives on this host.
+ *
+ * On a laptop or a Pi it is a file. On a container host like Fly or Railway
+ * there is no persistent filesystem to put it on and no safe way to bake it into
+ * an image, so it can instead be handed over base64-encoded in a secret:
+ *
+ *   fly secrets set SHOPWISE_VAULT_B64="$(base64 -w0 vault.enc)"
+ *
+ * It stays encrypted either way — this is the ciphertext, not the card. The
+ * passphrase is still needed separately, so one leaked secret is not enough.
+ */
+function readVaultCiphertext() {
+  const encoded = process.env.SHOPWISE_VAULT_B64;
+  if (encoded) return Buffer.from(encoded, 'base64').toString('utf8');
+  if (fs.existsSync(config.vaultFile)) return fs.readFileSync(config.vaultFile, 'utf8');
+  return null;
+}
+
 export function vaultExists() {
-  return fs.existsSync(config.vaultFile);
+  return Boolean(process.env.SHOPWISE_VAULT_B64) || fs.existsSync(config.vaultFile);
 }
 
 function passphraseFromEnvOrKeyfile() {
@@ -91,8 +110,11 @@ function passphraseFromEnvOrKeyfile() {
  * @param {() => Promise<string>} [interactivePrompt] used when no env/keyfile passphrase exists
  */
 export async function loadVault(interactivePrompt) {
-  if (!vaultExists()) {
-    throw new Error('No vault found. Run `node src/index.js setup` first.');
+  const ciphertext = readVaultCiphertext();
+  if (!ciphertext) {
+    throw new Error(
+      'No vault found. Run `node src/index.js setup` first, or set SHOPWISE_VAULT_B64.',
+    );
   }
   let passphrase = passphraseFromEnvOrKeyfile();
   if (!passphrase) {
@@ -106,7 +128,7 @@ export async function loadVault(interactivePrompt) {
 
   let data;
   try {
-    data = decryptVault(fs.readFileSync(config.vaultFile, 'utf8'), passphrase);
+    data = decryptVault(ciphertext, passphrase);
   } catch {
     throw new Error('Could not decrypt vault — wrong passphrase or the file is corrupt.');
   }
