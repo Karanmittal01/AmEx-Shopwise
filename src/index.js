@@ -1,27 +1,33 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { config, loadSelectors, ROOT } from './config.js';
-import { log, openRunLog, closeRunLog, registerSecret, maskCard } from './log.js';
+import { config, loadSelectors, expectedCharge, ROOT } from './config.js';
+import { log, openRunLog, closeRunLog, registerSecret, maskCard, redact } from './log.js';
 import { ask, askRequired, confirm } from './prompt.js';
 import { saveVault, loadVault, vaultExists } from './vault.js';
 import { runPurchase, launchBrowser } from './flow.js';
+import { startControlServer } from './control.js';
+import { setOtpProvider } from './otp.js';
 import { loadState, saveState, isDue, recordRun, successfulRuns, monthKey } from './state.js';
 
 const USAGE = `
-Amex Shopwise — Amazon Pay gift card autobuy
+Amex Shopwise — Amazon Pay gift card
 
-  node src/index.js setup             Store portal login + card details (encrypted)
-  node src/index.js calibrate [url]   Open a page and dump its selectors, to fix selectors.local.json
-  node src/index.js run [options]     Run the purchase flow once, from this terminal
-  node src/index.js worker            Poll the Tools page for purchases and run them
-  node src/index.js status            Show progress through the ${config.totalRuns} monthly purchases
-  node src/index.js reset             Clear the run history (does not touch the vault)
+  npm run setup     Store your mobile number and card, encrypted
+  npm run buy       Buy one, driven from your phone     ← the one you want
+  npm run status    Progress through the ${config.totalRuns} monthly purchases
+
+Occasionally useful
+
+  node src/index.js calibrate [url]   Dump a page's real selectors, when a step breaks
+  node src/index.js run [--live]      Same purchase, driven from this terminal
+  node src/index.js worker            Long-running mode, for an always-on box
+  node src/index.js reset             Clear the run history (leaves the vault alone)
 
 run options:
-  --live        Actually pay. Without it the run stops at the cart (dry run).
-  --if-due      Do nothing unless a purchase is due this month. Use this in cron.
-  --headful     Show the browser window. Recommended for the first run.
+  --live        Actually pay. Without it the run stops at the cart.
+  --if-due      Do nothing unless a purchase is due this month. For cron.
+  --headful     Show the browser window.
 `;
 
 const args = process.argv.slice(2);
@@ -199,6 +205,72 @@ async function cmdReset() {
   console.log('Run history cleared. The vault is untouched.');
 }
 
+/**
+ * The whole thing, in one command.
+ *
+ * Starts the control page, waits for you to tap Buy on your phone, drives the
+ * purchase, and asks for each OTP through the same page. One process, nothing to
+ * deploy, nothing to configure beyond the vault.
+ */
+async function cmdBuy() {
+  const vault = await loadVault(() => askRequired('Vault passphrase: ', { hidden: true }));
+  const selectors = loadSelectors();
+  const control = await startControlServer({
+    port: config.otpPort,
+    amount: config.amount,
+    currency: config.currencySymbol,
+  });
+
+  const expect = expectedCharge(config.amount);
+  console.log('\n  Open this on your phone:\n');
+  for (const url of control.urls) console.log(`    ${url}`);
+  console.log(
+    `\n  Card ${maskCard(vault.cardNumber)} · ` +
+      `${config.currencySymbol}${expect.faceValue} card, about ` +
+      `${config.currencySymbol}${expect.total} charged\n`,
+  );
+  console.log('  Waiting for you to tap Buy…  (Ctrl-C to stop)\n');
+
+  const mode = await control.waitForStart();
+  const live = mode === 'live';
+  const runDir = path.join(config.runsDir, new Date().toISOString().replace(/[:.]/g, '-'));
+  openRunLog(runDir);
+  setOtpProvider(control.requestOtp);
+
+  try {
+    const result = await runPurchase({
+      vault,
+      selectors,
+      live,
+      runDir,
+      onProgress: async (update) => control.setPhase(update),
+    });
+
+    control.finish(result);
+    if (result.status === 'success') {
+      const updated = recordRun({
+        status: 'success',
+        total: result.total,
+        fee: result.fee,
+        orderId: result.orderId,
+      });
+      const done = successfulRuns(updated).length;
+      log.info(`purchase ${done} of ${config.totalRuns} recorded`);
+    }
+    console.log('\n  Done. Ctrl-C to close.\n');
+  } catch (err) {
+    log.error(err);
+    if (live) recordRun({ status: 'failed', error: String(err.message || err) });
+    control.finish({ error: redact(String(err.message || err)) });
+    log.error(`Screenshots and the log are in ${runDir}`);
+    process.exitCode = 1;
+  } finally {
+    closeRunLog();
+    setOtpProvider(null);
+    // The page stays up so the result is readable on the phone.
+  }
+}
+
 async function cmdWorker() {
   const { runWorker } = await import('./worker.js');
   if (!config.appUrl || !config.workerToken) {
@@ -209,6 +281,7 @@ async function cmdWorker() {
 
 const commands = {
   setup: cmdSetup,
+  buy: cmdBuy,
   calibrate: cmdCalibrate,
   run: cmdRun,
   worker: cmdWorker,

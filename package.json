@@ -8,6 +8,7 @@
   },
   "scripts": {
     "setup": "node src/index.js setup",
+    "buy": "node src/index.js buy",
     "calibrate": "node src/index.js calibrate",
     "run": "node src/index.js run",
     "worker": "node src/index.js worker",
