@@ -1,0 +1,14 @@
+# Secrets — never commit these
+vault.enc
+vault.key
+.env
+otp.txt
+
+# Runtime state
+state.json
+browser-profile/
+runs/
+*.log
+
+# Node
+node_modules/

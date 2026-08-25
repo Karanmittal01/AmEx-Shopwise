@@ -1,0 +1,187 @@
+{
+  "_comment": [
+    "Candidate locators for each step, tried in order across every frame on the page.",
+    "These are informed guesses at a typical Indian gift-card portal — the first run",
+    "WILL need corrections. Run `node src/index.js calibrate`, find the real selectors,",
+    "and put overrides in selectors.local.json (same keys, replaces the list outright).",
+    "Never edit this file for personal fixes; selectors.local.json is gitignored-adjacent",
+    "and keeps your customisations separate from updates."
+  ],
+
+  "loggedInMarker": [
+    "role=link|Logout",
+    "role=button|Logout",
+    "text=Sign out",
+    "css=[data-testid='account-menu']",
+    "css=.user-name, .account-name"
+  ],
+  "loginLink": [
+    "role=link|Login",
+    "role=button|Login",
+    "role=link|Sign in",
+    "text=Login"
+  ],
+  "username": [
+    "label=User ID",
+    "label=Username",
+    "placeholder=User ID",
+    "placeholder=Mobile",
+    "css=input[name='username'], input[name='userid'], input#username"
+  ],
+  "password": [
+    "label=Password",
+    "placeholder=Password",
+    "css=input[type='password']"
+  ],
+  "loginSubmit": [
+    "role=button|Log in",
+    "role=button|Login",
+    "role=button|Sign in",
+    "css=button[type='submit']"
+  ],
+  "loginOtp": [
+    "label=OTP",
+    "placeholder=OTP",
+    "placeholder=Enter OTP",
+    "css=input[autocomplete='one-time-code'], input[name*='otp' i]"
+  ],
+  "loginOtpSubmit": [
+    "role=button|Verify",
+    "role=button|Submit",
+    "role=button|Continue",
+    "css=button[type='submit']"
+  ],
+
+  "searchInput": [
+    "role=searchbox",
+    "placeholder=Search",
+    "css=input[type='search'], input[name='q'], input[name='search']"
+  ],
+  "searchSubmit": [
+    "role=button|Search",
+    "css=button[type='submit'][aria-label*='search' i]"
+  ],
+  "productLink": [
+    "role=link|Amazon Pay",
+    "text=Amazon Pay Gift Card",
+    "text=Amazon Pay",
+    "css=a[href*='amazon-pay' i]"
+  ],
+
+  "denomination": [
+    "role=button|1000",
+    "role=radio|1000",
+    "text=₹1,000",
+    "text=₹1000",
+    "css=[data-denomination='1000'], [data-value='1000']"
+  ],
+  "amountInput": [
+    "label=Amount",
+    "placeholder=Amount",
+    "placeholder=Enter amount",
+    "css=input[name*='amount' i], input#amount"
+  ],
+  "quantityInput": [
+    "label=Quantity",
+    "css=input[name*='quantity' i], input#quantity"
+  ],
+
+  "addToCart": [
+    "role=button|Add to cart",
+    "role=button|Add to bag",
+    "text=Add to cart",
+    "css=button[data-action='add-to-cart']"
+  ],
+  "goToCart": [
+    "role=link|View cart",
+    "role=link|Cart",
+    "role=button|Go to cart",
+    "css=a[href*='cart']"
+  ],
+  "orderTotal": [
+    "css=[data-testid='order-total']",
+    "css=.order-total, .grand-total, .cart-total, .total-amount",
+    "text=Order total",
+    "text=Grand total",
+    "text=Total payable"
+  ],
+  "checkout": [
+    "role=button|Proceed to checkout",
+    "role=button|Checkout",
+    "role=button|Place order",
+    "role=button|Proceed to pay",
+    "text=Proceed to pay"
+  ],
+
+  "payWithCard": [
+    "role=button|Credit / Debit card",
+    "role=radio|Credit Card",
+    "text=Credit / Debit Card",
+    "text=Card",
+    "css=[data-payment-method='card']"
+  ],
+  "cardNumber": [
+    "label=Card number",
+    "placeholder=Card number",
+    "placeholder=1234 5678",
+    "css=input[name*='cardnumber' i], input[name*='card_number' i], input#cardNumber"
+  ],
+  "cardExpiry": [
+    "label=Expiry",
+    "placeholder=MM / YY",
+    "placeholder=MM/YY",
+    "css=input[name*='expiry' i], input#cardExpiry"
+  ],
+  "cardExpMonth": [
+    "label=Expiry month",
+    "css=select[name*='month' i], input[name*='expmonth' i]"
+  ],
+  "cardExpYear": [
+    "label=Expiry year",
+    "css=select[name*='year' i], input[name*='expyear' i]"
+  ],
+  "cardCvv": [
+    "label=CVV",
+    "label=CVC",
+    "placeholder=CVV",
+    "css=input[name*='cvv' i], input[name*='cvc' i], input#cvv"
+  ],
+  "cardName": [
+    "label=Name on card",
+    "placeholder=Name on card",
+    "css=input[name*='cardholder' i], input[name*='nameoncard' i]"
+  ],
+  "payNow": [
+    "role=button|Pay now",
+    "role=button|Pay ₹",
+    "role=button|Make payment",
+    "role=button|Pay",
+    "text=Pay now"
+  ],
+
+  "paymentOtp": [
+    "label=OTP",
+    "placeholder=OTP",
+    "placeholder=Enter OTP",
+    "css=input[autocomplete='one-time-code'], input[name*='otp' i], input#otpValue"
+  ],
+  "paymentOtpSubmit": [
+    "role=button|Submit",
+    "role=button|Verify",
+    "role=button|Confirm",
+    "css=button[type='submit'], input[type='submit']"
+  ],
+
+  "orderConfirmation": [
+    "text=Order confirmed",
+    "text=Payment successful",
+    "text=Thank you for your order",
+    "text=Order placed",
+    "css=[data-testid='order-success']"
+  ],
+  "orderId": [
+    "css=[data-testid='order-id']",
+    "css=.order-id, .order-number",
+    "text=Order ID"
+  ]
+}

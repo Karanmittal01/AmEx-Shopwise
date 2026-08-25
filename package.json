@@ -1,0 +1,24 @@
+{
+  "name": "amex-shopwise-autobuy",
+  "version": "1.0.0",
+  "description": "Semi-automated Amazon Pay gift card purchase on the Amex Shopwise portal. You supply the OTP; the script does the rest.",
+  "type": "module",
+  "bin": {
+    "shopwise": "src/index.js"
+  },
+  "scripts": {
+    "setup": "node src/index.js setup",
+    "calibrate": "node src/index.js calibrate",
+    "run": "node src/index.js run",
+    "status": "node src/index.js status",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "license": "MIT",
+  "private": true
+}
